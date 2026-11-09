@@ -6454,20 +6454,26 @@ rb_str_casemap(VALUE source, OnigCaseFoldType *flags, rb_encoding *enc)
     VALUE target;
 
     OnigUChar *source_current, *source_end;
-    int target_length = 0;
+    long target_length = 0;
     mapping_buffer pre_buffer, /* only next pointer used */
 		  *current_buffer = &pre_buffer;
     size_t buffer_count = 0;
     int buffer_length_or_invalid;
 
     if (RSTRING_LEN(source) == 0) return rb_str_dup(source);
+    if (RSTRING_LEN(source) > INT_MAX - CASE_MAPPING_ADDITIONAL_LENGTH)
+        rb_raise(rb_eArgError, "string size too big");
 
     source_current = (OnigUChar*)RSTRING_PTR(source);
     source_end = (OnigUChar*)RSTRING_END(source);
 
     while (source_current < source_end) {
 	/* increase multiplier using buffer count to converge quickly */
-	size_t capa = (size_t)(source_end-source_current)*++buffer_count + CASE_MAPPING_ADDITIONAL_LENGTH;
+	size_t capa = (size_t)(source_end-source_current);
+	if (capa > (INT_MAX - CASE_MAPPING_ADDITIONAL_LENGTH) / ++buffer_count)
+	    capa = INT_MAX;
+	else
+	    capa = capa * buffer_count + CASE_MAPPING_ADDITIONAL_LENGTH;
 	if (CASEMAP_DEBUG) {
 	    fprintf(stderr, "Buffer allocation, capa is %"PRIuSIZE"\n", capa); /* for tuning */
 	}
@@ -6480,7 +6486,7 @@ rb_str_casemap(VALUE source, OnigCaseFoldType *flags, rb_encoding *enc)
 				   current_buffer->space,
 				   current_buffer->space+current_buffer->capa,
 				   enc);
-	if (buffer_length_or_invalid < 0) {
+	if (buffer_length_or_invalid < 0 || buffer_length_or_invalid > LONG_MAX - target_length) {
 	    mapping_buffer *previous_buffer;
 
 	    current_buffer = pre_buffer.next;
@@ -6489,7 +6495,9 @@ rb_str_casemap(VALUE source, OnigCaseFoldType *flags, rb_encoding *enc)
 		current_buffer  = current_buffer->next;
 		ruby_sized_xfree(previous_buffer, previous_buffer->capa);
 	    }
-	    rb_raise(rb_eArgError, "input string invalid");
+	    if (buffer_length_or_invalid < 0)
+	        rb_raise(rb_eArgError, "input string invalid");
+	    rb_raise(rb_eArgError, "string size too big");
 	}
 	target_length  += current_buffer->used = buffer_length_or_invalid;
     }
